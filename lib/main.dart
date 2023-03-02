@@ -1,8 +1,12 @@
-import 'dart:developer';
-
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:bloc/bloc.dart';
-import 'dart:math' as math show Random;
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'dart:developer' as devtools show log;
+
+extension Log on Object {
+  void log() => devtools.log(toString());
+}
 
 void main() {
   runApp(
@@ -11,86 +15,182 @@ void main() {
       theme: ThemeData(
         primarySwatch: Colors.blue,
       ),
-      home: const HomePage(),
+      home: BlocProvider(
+        create: (_) => PersonsBloc(),
+        child: const HomePage(),
+      ),
     ),
   );
 }
 
-const names = [
-  'Cecy',
-  'Lucy',
-  'Winna',
-];
-
-extension RandomElement<T> on Iterable<T> {
-  T getRandomElement() => elementAt(math.Random().nextInt(length));
+// Generic type for our the events of our bloc
+@immutable
+abstract class LoadAction {
+  const LoadAction();
 }
 
-class NamesCubit extends Cubit<String?> {
-  NamesCubit() : super(null);
-
-  void pickRandomName() => emit(names.getRandomElement());
+// List of url for our jsons
+enum PersonUrl {
+  persons1,
+  persons2,
 }
 
-class HomePage extends StatefulWidget {
+// Adding the actual url's to PersonUrl
+extension UrlString on PersonUrl {
+  String get urlString {
+    switch (this) {
+      case PersonUrl.persons1:
+        return 'http://127.0.0.1:5500/api/persons1.json';
+      case PersonUrl.persons2:
+        return 'http://127.0.0.1:5500/api/persons2.json';
+    }
+  }
+}
+
+// Defining the event for loading persons
+@immutable
+class LoadPersonsAction implements LoadAction {
+  final PersonUrl url;
+  const LoadPersonsAction({required this.url}) : super();
+}
+
+// Creating a person class that can be initialized from our json object 
+//(or allow us to create a person directly from the json object)
+@immutable
+class Person {
+  final String name;
+  final String age;
+
+  const Person({
+    required this.name,
+    required this.age,
+  });
+
+  Person.fromJson(Map<String, dynamic> json)
+      : name = json['name'] as String,
+        age = json['age'] as String;
+
+  @override
+  String toString() {
+    return 'person: name = $name, age=$age';
+  }
+}
+
+// Function to download the content in the url, parse it as json, create instances
+// of Person from that json and returning a list os those persons
+Future<Iterable<Person>> getPersons(String url) => HttpClient()
+    .getUrl(Uri.parse(url))
+    .then((req) => req.close())
+    .then((resp) => resp.transform(utf8.decoder).join())
+    .then((str) => json.decode(str) as List<dynamic>)
+    .then((list) => list.map((e) => Person.fromJson(e)));
+
+// The output is going to be return ofter the event
+@immutable
+class FetchResult {
+  final Iterable<Person> persons;
+  final bool isRetrievedFromCache;
+
+  const FetchResult({
+    required this.persons,
+    required this.isRetrievedFromCache,
+  });
+
+  @override
+  String toString() =>
+      'FetchResult (isRetrievedFromCache: $isRetrievedFromCache, person: $persons)';
+}
+
+// Defining the bloc header, here we say when a given event happen what we return
+class PersonsBloc extends Bloc<LoadAction, FetchResult?> {
+  final Map<PersonUrl, Iterable<Person>> _cache = {};
+  PersonsBloc() : super(null) {
+    on<LoadPersonsAction>(
+      (event, emit) async {
+        final url = event.url;
+
+        if (_cache.containsKey(url)) {
+          final cachedPersons = _cache[url]!;
+          final result = FetchResult(
+            persons: cachedPersons,
+            isRetrievedFromCache: true,
+          );
+          emit(result);
+        } else {
+          final persons = await getPersons(url.urlString);
+          _cache[url] = persons;
+          final result = FetchResult(
+            persons: persons,
+            isRetrievedFromCache: false,
+          );
+          emit(result);
+        }
+      },
+    );
+  }
+}
+
+extension Subscript<T> on Iterable<T> {
+  T? operator [](int index) => length > index ? elementAt(index) : null;
+}
+
+class HomePage extends StatelessWidget {
   const HomePage({super.key});
-
-  @override
-  State<HomePage> createState() => _HomePageState();
-}
-
-class _HomePageState extends State<HomePage> {
-  late final NamesCubit cubit;
-
-  @override
-  void initState() {
-    super.initState();
-    cubit = NamesCubit();
-  }
-
-  @override
-  void dispose() {
-    cubit.close();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Home'),
+        title: const Text('Title'),
       ),
-      body: StreamBuilder<String?>(
-        stream: cubit.stream,
-        builder: (context, snapshot) {
-          final button = TextButton(
-            onPressed: () => cubit.pickRandomName(),
-            child: const Text('Pick a random name'),
-          );
+      body: Column(
+        children: [
+          Row(
+            children: [
+              TextButton(
+                onPressed: () {
+                  context.read<PersonsBloc>().add(
+                        const LoadPersonsAction(url: PersonUrl.persons1),
+                      );
+                },
+                child: const Text('Load json #1'),
+              ),
+              TextButton(
+                onPressed: () {
+                  context.read<PersonsBloc>().add(
+                        const LoadPersonsAction(url: PersonUrl.persons2),
+                      );
+                },
+                child: const Text('Load json #2'),
+              ),
+            ],
+          ),
+          BlocBuilder<PersonsBloc, FetchResult?>(
+            buildWhen: (previousResult, currentResult) {
+              return previousResult?.persons != currentResult?.persons;
+            },
+            builder: (context, fetchResult) {
+              fetchResult?.log();
+              final persons = fetchResult?.persons;
 
-          switch (snapshot.connectionState) {
-            case ConnectionState.none:
-              return Center(
-                child: button,
-              );
-            case ConnectionState.waiting:
-              return Center(
-                child: button,
-              );
-            case ConnectionState.active:
-              return Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(snapshot.data ?? 'Something went wrong'),
-                    button,
-                  ],
+              if (persons == null) {
+                return const Text ('Im null');
+              }
+
+              return Expanded(
+                child: ListView.builder(
+                  itemCount: persons.length,
+                  itemBuilder: (context, index) {
+                    final person = persons[index]!;
+                    return ListTile(
+                      title: Text(person.name),
+                    );
+                  },
                 ),
               );
-            case ConnectionState.done:
-              return const SizedBox();
-          }
-        },
+            },
+          ),
+        ],
       ),
     );
   }
