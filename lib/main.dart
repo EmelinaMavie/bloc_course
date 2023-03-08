@@ -4,6 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'dart:developer' as devtools show log;
 
+import 'bloc/bloc_actions.dart';
+import 'bloc/person.dart';
+import 'bloc/persons_bloc.dart';
+
 extension Log on Object {
   void log() => devtools.log(toString());
 }
@@ -23,59 +27,6 @@ void main() {
   );
 }
 
-// Generic type for our the events of our bloc
-@immutable
-abstract class LoadAction {
-  const LoadAction();
-}
-
-// List of url for our jsons
-enum PersonUrl {
-  persons1,
-  persons2,
-}
-
-// Adding the actual url's to PersonUrl
-extension UrlString on PersonUrl {
-  String get urlString {
-    switch (this) {
-      case PersonUrl.persons1:
-        return 'http://127.0.0.1:5500/api/persons1.json';
-      case PersonUrl.persons2:
-        return 'http://127.0.0.1:5500/api/persons2.json';
-    }
-  }
-}
-
-// Defining the event for loading persons
-@immutable
-class LoadPersonsAction implements LoadAction {
-  final PersonUrl url;
-  const LoadPersonsAction({required this.url}) : super();
-}
-
-// Creating a person class that can be initialized from our json object 
-//(or allow us to create a person directly from the json object)
-@immutable
-class Person {
-  final String name;
-  final String age;
-
-  const Person({
-    required this.name,
-    required this.age,
-  });
-
-  Person.fromJson(Map<String, dynamic> json)
-      : name = json['name'] as String,
-        age = json['age'] as String;
-
-  @override
-  String toString() {
-    return 'person: name = $name, age=$age';
-  }
-}
-
 // Function to download the content in the url, parse it as json, create instances
 // of Person from that json and returning a list os those persons
 Future<Iterable<Person>> getPersons(String url) => HttpClient()
@@ -84,51 +35,6 @@ Future<Iterable<Person>> getPersons(String url) => HttpClient()
     .then((resp) => resp.transform(utf8.decoder).join())
     .then((str) => json.decode(str) as List<dynamic>)
     .then((list) => list.map((e) => Person.fromJson(e)));
-
-// The output is going to be return ofter the event
-@immutable
-class FetchResult {
-  final Iterable<Person> persons;
-  final bool isRetrievedFromCache;
-
-  const FetchResult({
-    required this.persons,
-    required this.isRetrievedFromCache,
-  });
-
-  @override
-  String toString() =>
-      'FetchResult (isRetrievedFromCache: $isRetrievedFromCache, person: $persons)';
-}
-
-// Defining the bloc header, here we say when a given event happen what we return
-class PersonsBloc extends Bloc<LoadAction, FetchResult?> {
-  final Map<PersonUrl, Iterable<Person>> _cache = {};
-  PersonsBloc() : super(null) {
-    on<LoadPersonsAction>(
-      (event, emit) async {
-        final url = event.url;
-
-        if (_cache.containsKey(url)) {
-          final cachedPersons = _cache[url]!;
-          final result = FetchResult(
-            persons: cachedPersons,
-            isRetrievedFromCache: true,
-          );
-          emit(result);
-        } else {
-          final persons = await getPersons(url.urlString);
-          _cache[url] = persons;
-          final result = FetchResult(
-            persons: persons,
-            isRetrievedFromCache: false,
-          );
-          emit(result);
-        }
-      },
-    );
-  }
-}
 
 extension Subscript<T> on Iterable<T> {
   T? operator [](int index) => length > index ? elementAt(index) : null;
@@ -150,7 +56,10 @@ class HomePage extends StatelessWidget {
               TextButton(
                 onPressed: () {
                   context.read<PersonsBloc>().add(
-                        const LoadPersonsAction(url: PersonUrl.persons1),
+                        const LoadPersonsAction(
+                          url: persons1Url,
+                          loader: getPersons,
+                        ),
                       );
                 },
                 child: const Text('Load json #1'),
@@ -158,7 +67,10 @@ class HomePage extends StatelessWidget {
               TextButton(
                 onPressed: () {
                   context.read<PersonsBloc>().add(
-                        const LoadPersonsAction(url: PersonUrl.persons2),
+                        const LoadPersonsAction(
+                          url: persons2Url,
+                          loader: getPersons,
+                        ),
                       );
                 },
                 child: const Text('Load json #2'),
@@ -174,7 +86,7 @@ class HomePage extends StatelessWidget {
               final persons = fetchResult?.persons;
 
               if (persons == null) {
-                return const Text ('Im null');
+                return const Text('Im null');
               }
 
               return Expanded(
